@@ -9,11 +9,23 @@ from av import VideoFrame
 import time
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
-from uvicorn import run
 import numpy as np
 from pydantic import BaseModel
 import v4l2py
 import cv2
+
+
+def parse_video_capture_devices():
+    video_capture_devices = list(v4l2py.iter_video_capture_devices())
+
+    parsed_video_capture_devices = []
+
+    for device in video_capture_devices:
+        with device:
+            parsed_video_capture_devices.append(device)
+
+    return parsed_video_capture_devices
+
 
 black_frame = np.zeros((640, 480, 3), dtype=np.uint8)
 
@@ -21,19 +33,6 @@ black_frame = np.zeros((640, 480, 3), dtype=np.uint8)
 class WebRTCOffer(BaseModel):
     sdp: str
     type: str
-
-
-def get_devices_info():
-    devices = list(v4l2py.iter_video_capture_devices())
-
-    devices_info = []
-
-    for device in devices:
-        with device:
-            print(device.get_format(v4l2py.device.BufferType.VIDEO_CAPTURE))
-            devices_info.append(device.info)
-
-    return devices_info
 
 
 class CameraStreamTrack(MediaStreamTrack):
@@ -49,7 +48,16 @@ class CameraStreamTrack(MediaStreamTrack):
 
     def __init__(self):
         super().__init__()
-        self.video_capture = cv2.VideoCapture(0)
+        self.video_capture = cv2.VideoCapture(
+            0,
+            cv2.CAP_V4L2,
+            params=[
+                cv2.CAP_PROP_FRAME_WIDTH,
+                160,
+                cv2.CAP_PROP_FRAME_HEIGHT,
+                120,
+            ],
+        )
         self.device = v4l2py.Device.from_id(2)
         self.device.open()
         self.stream = iter(self.device)
@@ -75,11 +83,16 @@ class CameraStreamTrack(MediaStreamTrack):
             self._started = True
 
     async def get_frame(self):
-        frame = next(self.stream)
-        data = frame.array
-        data.shape = frame.height, frame.width, -1
-        bgr = cv2.cvtColor(data, cv2.COLOR_YUV2BGR_YUYV)
-        return VideoFrame.from_ndarray(array=bgr, format="bgr24")
+        success, frame = self.video_capture.read()
+        return VideoFrame.from_ndarray(
+            array=frame if success else black_frame, format="bgr24"
+        )
+
+        # frame = next(self.stream)
+        # data = frame.array
+        # data.shape = frame.height, frame.width, -1
+        # bgr = cv2.cvtColor(data, cv2.COLOR_YUV2BGR_YUYV)
+        # return VideoFrame.from_ndarray(array=bgr, format="bgr24")
 
 
 def main():
@@ -110,17 +123,31 @@ def main():
 
     @app.get("/devices")
     def get_devices():
-        devices_info = get_devices_info()
+        video_capture_devices = parse_video_capture_devices()
+
         devices = [
             {
-                "driver": device_info.driver,
-                "card": device_info.card,
-                "version": device_info.version,
-                "capabilities": device_info.capabilities,
-                "device_capabilities": device_info.device_capabilities,
-                "buffers": device_info.buffers,
+                "filename": device.filename,
+                "index": device.index,
+                "driver": device.info.driver,
+                "card": device.info.card,
+                "version": device.info.version,
+                "capabilities": device.info.capabilities,
+                "device_capabilities": device.info.device_capabilities,
+                "crop_capabilities": device.info.crop_capabilities,
+                "frame_sizes": [
+                    {
+                        "pixel_format": frame_size.pixel_format.human_str(),
+                        "width": frame_size.width,
+                        "height": frame_size.height,
+                        "max_fps": str(frame_size.max_fps),
+                        "min_fps": str(frame_size.min_fps),
+                        "step_fps": str(frame_size.step_fps),
+                    }
+                    for frame_size in device.info.frame_sizes
+                ],
             }
-            for device_info in devices_info
+            for device in video_capture_devices
         ]
 
         return devices
@@ -164,7 +191,8 @@ def main():
 
         return peer_connection.localDescription
 
-    run(app, host="0.0.0.0", port=8080)
+    # run(app, host="0.0.0.0", port=8080)
+    return app
 
 
 if __name__ == "__main__":
