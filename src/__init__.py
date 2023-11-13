@@ -50,11 +50,8 @@ class CameraStreamTrack(MediaStreamTrack):
     def __init__(self):
         super().__init__()
         self.video_capture = cv2.VideoCapture(0)
-        self.device = v4l2py.Device.from_id(10)
+        self.device = v4l2py.Device.from_id(2)
         self.device.open()
-        self.device.set_format(
-            v4l2py.device.BufferType.VIDEO_CAPTURE, 1920, 1080, "YUYV"
-        )
         self.stream = iter(self.device)
 
     async def recv(self) -> Frame:
@@ -132,6 +129,20 @@ def main():
     async def post_offer(offer: WebRTCOffer):
         peer_connection = RTCPeerConnection()
         peer_connections.add(peer_connection)
+
+        @peer_connection.on("datachannel")
+        def on_datachannel(channel):
+            print(channel.label, "-", "created by remote party")
+
+            @channel.on("message")
+            async def on_message(message):
+                match channel.label:
+                    case "status":
+                        if message == "disconnected":
+                            await peer_connection.close()
+                            peer_connections.discard(peer_connection)
+                        else:
+                            print(channel.label, " received message: ", message)
 
         @peer_connection.on("connectionstatechange")
         async def on_connectionstatechange():
