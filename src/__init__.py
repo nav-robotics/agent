@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from aiortc.contrib.media import MediaStreamTrack
+from aiortc.contrib.media import MediaStreamTrack, MediaPlayer
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from typing import Tuple
 import fractions
@@ -9,10 +9,12 @@ from av import VideoFrame
 import time
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn import run
 import numpy as np
 from pydantic import BaseModel
 import v4l2py
 import cv2
+import json
 
 
 def parse_video_capture_devices():
@@ -46,23 +48,21 @@ class CameraStreamTrack(MediaStreamTrack):
     clock_rate = 90000
     time_base = fractions.Fraction(1, clock_rate)
 
-    def __init__(self):
+    def __init__(self, index=0, apiPreference=cv2.CAP_V4L2, params=[]):
         super().__init__()
+
         self.video_capture = cv2.VideoCapture(
-            0,
-            cv2.CAP_V4L2,
-            params=[
-                cv2.CAP_PROP_FRAME_WIDTH,
-                160,
-                cv2.CAP_PROP_FRAME_HEIGHT,
-                120,
-            ],
+            index=index,
+            apiPreference=apiPreference,
+            params=params,
         )
-        self.device = v4l2py.Device.from_id(2)
-        self.device.open()
-        self.stream = iter(self.device)
+        self.index = index
+        # self.device = v4l2py.Device.from_id(2)
+        # self.device.open()
+        # self.stream = iter(self.device)
 
     async def recv(self) -> Frame:
+        print("receiving: ", self.index)
         await self.next_timestamp()
 
         frame = await self.get_frame()
@@ -101,7 +101,8 @@ def main():
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
-        coroutines = [peer_connection.close() for peer_connection in peer_connections]
+        coroutines = [peer_connection.close()
+                      for peer_connection in peer_connections]
         await asyncio.gather(*coroutines)
         peer_connections.clear()
 
@@ -171,6 +172,31 @@ def main():
                         else:
                             print(channel.label, " received message: ", message)
 
+                    case "track":
+                        print("track")
+
+                        track = CameraStreamTrack(2)
+                        peer_connection.addTrack(track)
+                        channel.send("")
+
+                    case "renegotiation":
+                        print("renegotiation")
+
+                        offer = json.loads(message)
+
+                        description = RTCSessionDescription(
+                            sdp=offer["sdp"], type=offer["type"]
+                        )
+                        await peer_connection.setRemoteDescription(description)
+
+                        answer = await peer_connection.createAnswer()
+                        await peer_connection.setLocalDescription(answer)
+
+                        channel.send(
+                            json.dumps(
+                                {"sdp": answer.sdp, "type": answer.type})
+                        )
+
         @peer_connection.on("connectionstatechange")
         async def on_connectionstatechange():
             print("connection: ", peer_connection.connectionState, peer_connection)
@@ -180,8 +206,8 @@ def main():
                     await peer_connection.close()
                     peer_connections.discard(peer_connection)
 
-        track = CameraStreamTrack()
-        peer_connection.addTrack(track)
+        peer_connection.addTrack(MediaPlayer("video-b.mp4").video)
+        peer_connection.addTrack(MediaPlayer("video-a.mp4").video)
 
         description = RTCSessionDescription(sdp=offer.sdp, type=offer.type)
         await peer_connection.setRemoteDescription(description)
