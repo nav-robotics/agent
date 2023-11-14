@@ -93,8 +93,7 @@ def main():
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
-        coroutines = [peer_connection.close()
-                      for peer_connection in peer_connections]
+        coroutines = [connection.close() for connection in peer_connections]
         await asyncio.gather(*coroutines)
 
         for video_capture in CameraStreamTrack.video_captures.values():
@@ -129,10 +128,15 @@ def main():
                 "index": device.index,
                 "driver": device.info.driver,
                 "card": device.info.card,
+                "bus_info": device.info.bus_info,
                 "version": device.info.version,
                 "capabilities": device.info.capabilities,
                 "device_capabilities": device.info.device_capabilities,
                 "crop_capabilities": device.info.crop_capabilities,
+                "buffers": device.info.buffers,
+                "formats": device.info.formats,
+                "inputs": device.info.inputs,
+                "controls": device.info.controls,
                 "frame_sizes": [
                     {
                         "pixel_format": frame_size.pixel_format.human_str(),
@@ -157,8 +161,6 @@ def main():
 
         @peer_connection.on("datachannel")
         def on_datachannel(channel):
-            # print(channel.label, "-", "created by remote party")
-
             @channel.on("message")
             async def on_message(message):
                 match channel.label:
@@ -177,7 +179,11 @@ def main():
 
                         channel.send(
                             json.dumps(
-                                {"sdp": answer.sdp, "type": answer.type})
+                                {
+                                    "sdp": peer_connection.localDescription.sdp,
+                                    "type": peer_connection.localDescription.type,
+                                }
+                            )
                         )
 
                     case "status":
@@ -188,19 +194,13 @@ def main():
 
                     case "track":
                         options = json.loads(message)
-
-                        # print('track options: ', options)
-                        print("index: ", options["index"])
-
                         track = CameraStreamTrack(options["index"])
-
                         peer_connection.addTrack(track)
-
                         channel.send("")
 
         @peer_connection.on("connectionstatechange")
         async def on_connectionstatechange():
-            print("connection: ", peer_connection.connectionState, peer_connection)
+            print("connection: ", peer_connection.connectionState)
 
             match peer_connection.connectionState:
                 case "failed":
