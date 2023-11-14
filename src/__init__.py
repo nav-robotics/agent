@@ -86,12 +86,6 @@ class CameraStreamTrack(MediaStreamTrack):
             array=frame if success else black_frame, format="bgr24"
         )
 
-    def stop(self):
-        print("stopping: ", self.index)
-        super().stop()
-        self.video_capture.release()
-        cv2.destroyAllWindows()
-
 
 def main():
     peer_connections = set()
@@ -99,12 +93,14 @@ def main():
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
-        coroutines = [peer_connection.close() for peer_connection in peer_connections]
+        coroutines = [peer_connection.close()
+                      for peer_connection in peer_connections]
         await asyncio.gather(*coroutines)
 
         for video_capture in CameraStreamTrack.video_captures.values():
             video_capture.release()
 
+        cv2.destroyAllWindows()
         peer_connections.clear()
 
     app = FastAPI(lifespan=lifespan)
@@ -165,7 +161,6 @@ def main():
 
             @channel.on("message")
             async def on_message(message):
-                print(channel.label, "received message: ", message)
                 match channel.label:
                     case "renegotiation":
                         print("renegotiation")
@@ -181,19 +176,26 @@ def main():
                         await peer_connection.setLocalDescription(answer)
 
                         channel.send(
-                            json.dumps({"sdp": answer.sdp, "type": answer.type})
+                            json.dumps(
+                                {"sdp": answer.sdp, "type": answer.type})
                         )
 
                     case "status":
                         match message:
                             case "disconnected":
-                                print("HERE NIGGUS")
                                 await peer_connection.close()
                                 peer_connections.discard(peer_connection)
 
                     case "track":
-                        track = CameraStreamTrack(8)
+                        options = json.loads(message)
+
+                        # print('track options: ', options)
+                        print("index: ", options["index"])
+
+                        track = CameraStreamTrack(options["index"])
+
                         peer_connection.addTrack(track)
+
                         channel.send("")
 
         @peer_connection.on("connectionstatechange")
@@ -204,9 +206,6 @@ def main():
                 case "failed":
                     await peer_connection.close()
                     peer_connections.discard(peer_connection)
-
-        peer_connection.addTrack(CameraStreamTrack(0))
-        peer_connection.addTrack(CameraStreamTrack(2))
 
         description = RTCSessionDescription(sdp=offer.sdp, type=offer.type)
         await peer_connection.setRemoteDescription(description)
