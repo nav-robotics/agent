@@ -43,21 +43,24 @@ class CameraStreamTrack(MediaStreamTrack):
     _start: float
     _timestamp: int
 
+    video_captures = {}
+
     frame_rate = 1 / 30
     clock_rate = 90000
     time_base = fractions.Fraction(1, clock_rate)
 
     def __init__(self, index=0, apiPreference=cv2.CAP_V4L2, params=[]):
         super().__init__()
-        self.video_capture = cv2.VideoCapture(
-            index=index,
-            apiPreference=apiPreference,
-            params=params,
-        )
         self.index = index
 
+        if index not in self.video_captures:
+            self.video_captures[index] = cv2.VideoCapture(
+                index=index,
+                apiPreference=apiPreference,
+                params=params,
+            )
+
     async def recv(self) -> Frame:
-        print("receiving: ", self.index)
         await self.next_timestamp()
 
         frame = await self.get_frame()
@@ -78,10 +81,16 @@ class CameraStreamTrack(MediaStreamTrack):
             self._started = True
 
     async def get_frame(self):
-        success, frame = self.video_capture.read()
+        success, frame = self.video_captures[self.index].read()
         return VideoFrame.from_ndarray(
             array=frame if success else black_frame, format="bgr24"
         )
+
+    def stop(self):
+        print("stopping: ", self.index)
+        super().stop()
+        self.video_capture.release()
+        cv2.destroyAllWindows()
 
 
 def main():
@@ -90,9 +99,12 @@ def main():
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
-        coroutines = [peer_connection.close()
-                      for peer_connection in peer_connections]
+        coroutines = [peer_connection.close() for peer_connection in peer_connections]
         await asyncio.gather(*coroutines)
+
+        for video_capture in CameraStreamTrack.video_captures.values():
+            video_capture.release()
+
         peer_connections.clear()
 
     app = FastAPI(lifespan=lifespan)
@@ -149,25 +161,12 @@ def main():
 
         @peer_connection.on("datachannel")
         def on_datachannel(channel):
-            print(channel.label, "-", "created by remote party")
+            # print(channel.label, "-", "created by remote party")
 
             @channel.on("message")
             async def on_message(message):
+                print(channel.label, "received message: ", message)
                 match channel.label:
-                    case "status":
-                        if message == "disconnected":
-                            await peer_connection.close()
-                            peer_connections.discard(peer_connection)
-                        else:
-                            print(channel.label, " received message: ", message)
-
-                    case "track":
-                        print("track")
-
-                        track = CameraStreamTrack(2)
-                        peer_connection.addTrack(track)
-                        channel.send("")
-
                     case "renegotiation":
                         print("renegotiation")
 
@@ -182,9 +181,20 @@ def main():
                         await peer_connection.setLocalDescription(answer)
 
                         channel.send(
-                            json.dumps(
-                                {"sdp": answer.sdp, "type": answer.type})
+                            json.dumps({"sdp": answer.sdp, "type": answer.type})
                         )
+
+                    case "status":
+                        match message:
+                            case "disconnected":
+                                print("HERE NIGGUS")
+                                await peer_connection.close()
+                                peer_connections.discard(peer_connection)
+
+                    case "track":
+                        track = CameraStreamTrack(8)
+                        peer_connection.addTrack(track)
+                        channel.send("")
 
         @peer_connection.on("connectionstatechange")
         async def on_connectionstatechange():
