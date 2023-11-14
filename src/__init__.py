@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from aiortc.contrib.media import MediaStreamTrack, MediaPlayer
+from aiortc.contrib.media import MediaStreamTrack
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from typing import Tuple
 import fractions
@@ -9,7 +9,6 @@ from av import VideoFrame
 import time
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
-from uvicorn import run
 import numpy as np
 from pydantic import BaseModel
 import v4l2py
@@ -50,16 +49,12 @@ class CameraStreamTrack(MediaStreamTrack):
 
     def __init__(self, index=0, apiPreference=cv2.CAP_V4L2, params=[]):
         super().__init__()
-
         self.video_capture = cv2.VideoCapture(
             index=index,
             apiPreference=apiPreference,
             params=params,
         )
         self.index = index
-        # self.device = v4l2py.Device.from_id(2)
-        # self.device.open()
-        # self.stream = iter(self.device)
 
     async def recv(self) -> Frame:
         print("receiving: ", self.index)
@@ -87,12 +82,6 @@ class CameraStreamTrack(MediaStreamTrack):
         return VideoFrame.from_ndarray(
             array=frame if success else black_frame, format="bgr24"
         )
-
-        # frame = next(self.stream)
-        # data = frame.array
-        # data.shape = frame.height, frame.width, -1
-        # bgr = cv2.cvtColor(data, cv2.COLOR_YUV2BGR_YUYV)
-        # return VideoFrame.from_ndarray(array=bgr, format="bgr24")
 
 
 def main():
@@ -206,8 +195,8 @@ def main():
                     await peer_connection.close()
                     peer_connections.discard(peer_connection)
 
-        peer_connection.addTrack(MediaPlayer("video-b.mp4").video)
-        peer_connection.addTrack(MediaPlayer("video-a.mp4").video)
+        peer_connection.addTrack(CameraStreamTrack(0))
+        peer_connection.addTrack(CameraStreamTrack(2))
 
         description = RTCSessionDescription(sdp=offer.sdp, type=offer.type)
         await peer_connection.setRemoteDescription(description)
@@ -217,7 +206,6 @@ def main():
 
         return peer_connection.localDescription
 
-    # run(app, host="0.0.0.0", port=8080)
     return app
 
 
