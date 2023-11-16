@@ -82,9 +82,14 @@ class CameraStreamTrack(MediaStreamTrack):
 
     async def get_frame(self):
         success, frame = self.video_captures[self.index].read()
-        return VideoFrame.from_ndarray(
-            array=frame if success else black_frame, format="bgr24"
-        )
+
+        if not success:
+            return VideoFrame.from_ndarray(array=black_frame, format="bgr24")
+
+        cv2_gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        np_color_frame = np.stack((cv2_gray_frame,) * 3, axis=-1)
+
+        return VideoFrame.from_ndarray(array=np_color_frame, format="bgr24")
 
 
 def main():
