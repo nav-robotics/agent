@@ -16,6 +16,10 @@ import cv2
 import json
 
 
+HEIGHT = 3 / 4
+WIDTH_RATIO = 1 / 4
+
+
 def parse_video_capture_devices():
     video_capture_devices = list(v4l2py.iter_video_capture_devices())
 
@@ -86,10 +90,26 @@ class CameraStreamTrack(MediaStreamTrack):
         if not success:
             return VideoFrame.from_ndarray(array=black_frame, format="bgr24")
 
-        cv2_gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        np_color_frame = np.stack((cv2_gray_frame,) * 3, axis=-1)
+        overlayed_frame = self.draw_overlay(frame)
 
-        return VideoFrame.from_ndarray(array=np_color_frame, format="bgr24")
+        return VideoFrame.from_ndarray(array=overlayed_frame, format="bgr24")
+
+    def draw_overlay(self, frame):
+        h, w = frame.shape[:2]
+
+        left_line_pts = np.array(
+            [
+                # left line
+                [[0, h], [int(w * (0 + WIDTH_RATIO)), int(h * HEIGHT)]],
+                # right line
+                [[int(w * (1 - WIDTH_RATIO)), int(h * HEIGHT)], [w, h]],
+            ],
+            dtype=np.int32,
+        )
+        overlayed_frame = cv2.polylines(
+            frame, left_line_pts, isClosed=True, color=(0, 0, 255), thickness=4
+        )
+        return overlayed_frame
 
 
 def main():
